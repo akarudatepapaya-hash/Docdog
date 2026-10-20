@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import './globals.css';
+import '../globals.css';
 
 export const metadata = { title: 'Docdog — ตรวจพิกัดและมาตรการ' };
 
