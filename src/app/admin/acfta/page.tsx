@@ -14,6 +14,8 @@ function Admin() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [sel, setSel] = useState<AcftaDocument | null>(null);
   const [msg, setMsg] = useState('');
+  const [bad, setBad] = useState(false);
+  const say = (t: string, isBad = false) => { setMsg(t); setBad(isBad); };
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({ status: 'PENDING', confidence: '', q: '', page: 0 });
 
@@ -34,34 +36,34 @@ function Admin() {
 
   async function upload(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setBusy(true); setMsg('กำลังอัปโหลดและอ่านไฟล์ (ไฟล์ใหญ่อาจใช้เวลาครึ่งนาที)…');
+    setBusy(true); say('กำลังอัปโหลดและอ่านไฟล์ (ไฟล์ใหญ่อาจใช้เวลาครึ่งนาที)…');
     const form = e.currentTarget;
     const r = await authedFetch('/api/acfta/documents', { method: 'POST', body: new FormData(form) });
     const j = await r.json().catch(() => ({ error: `เซิร์ฟเวอร์ตอบ ${r.status} (อาจหมดเวลาหรือไฟล์ใหญ่เกินไป)` }));
-    setMsg(r.ok
+    say(r.ok
       ? (j.candidateCount > 0 ? `สกัดได้ ${j.candidateCount} แถว (รอตรวจทาน) ` : `อ่านไฟล์ไม่สำเร็จ: `) + (j.warnings ?? []).join(' · ')
-      : j.error);
+      : j.error, !r.ok || !(j.candidateCount > 0));
     setBusy(false); void loadDocs();
   }
   async function act(id: string, action: 'approve' | 'reject') {
     const r = await authedFetch(`/api/acfta/records/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
-    if (!r.ok) setMsg((await r.json()).error);
+    if (!r.ok) say((await r.json()).error, true);
     if (sel) void loadRecs(sel);
   }
   async function bulk(status: 'APPROVED' | 'REJECTED', confidence?: 'MEDIUM') {
     if (!sel) return;
     const label = status === 'APPROVED' ? 'อนุมัติ' : 'ปฏิเสธ';
     if (!confirm(`${label}รายการที่รอตรวจทาน${confidence ? 'ที่ความมั่นใจ "ปานกลาง"' : 'ทั้งหมด'}ของเอกสารนี้?\nควรสุ่มเทียบกับไฟล์ PDF ต้นฉบับก่อน`)) return;
-    setBusy(true); setMsg(`กำลัง${label}…`);
+    setBusy(true); say(`กำลัง${label}… (หลายพันแถวอาจใช้เวลาสักครู่)`);
     const r = await authedFetch(`/api/acfta/documents/${sel.id}/review-all`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status, confidence }) });
     const j = await r.json();
-    setMsg(r.ok ? `${label}แล้ว ${j.changed} รายการ` : j.error);
+    say(r.ok ? `${label}แล้ว ${j.changed} รายการ` : j.error, !r.ok);
     setBusy(false); void loadRecs(sel);
   }
   async function publish(d: AcftaDocument) {
     const active = docs.find((x) => x.datasetKey === d.datasetKey && x.status === 'PUBLISHED');
     const r = await authedFetch(`/api/acfta/documents/${d.id}/publish`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ supersedes: active?.id }) });
-    setMsg(r.ok ? 'เผยแพร่แล้ว — ข้อมูลพร้อมใช้ในหน้าตรวจพิกัด' : (await r.json()).error);
+    if (r.ok) say('เผยแพร่แล้ว — ข้อมูลพร้อมใช้ในหน้าตรวจพิกัด'); else say((await r.json()).error, true);
     void loadDocs();
   }
   const setFilter = (p: Partial<typeof f>) => setF({ ...f, page: 0, ...p });
@@ -75,7 +77,7 @@ function Admin() {
         <input name="file" type="file" accept="application/pdf" required />
         <button disabled={busy}>อัปโหลด (เฉพาะ Admin)</button>
       </form>
-      {msg && <p role="status">{msg}</p>}
+      {msg && <p role={bad ? 'alert' : 'status'}>{msg}</p>}
       <h2>เอกสาร</h2>
       <ul>
         {docs.map((d) => (

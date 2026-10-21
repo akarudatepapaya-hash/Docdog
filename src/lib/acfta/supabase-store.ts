@@ -97,12 +97,29 @@ export class SupabaseAcftaStore implements AcftaStore {
     fail(error, 'countRecords'); return count ?? 0;
   }
   async bulkReview(documentId: string, status: 'APPROVED' | 'REJECTED', filter: { confidence?: 'LOW' | 'MEDIUM' }, _actorId: string) {
-    // batches of 1000 keep each statement short (Supabase statement timeout is a few seconds); audit rows come from the DB trigger
+    // Preferred: one SQL function call per 2000 rows (migration 20261021000002). Audit rows come from the DB trigger.
     let changed = 0;
-    for (;;) {
+    for (let i = 0; i < 40; i++) {
+      const { data, error } = await this.sb.rpc('acfta_bulk_review', { _doc: documentId, _status: status, _confidence: filter.confidence ?? null, _limit: 2000 });
+      if (error) {
+        if (error.code === 'PGRST202' || /could not find the function/i.test(error.message)) return changed + (await this.bulkReviewByIds(documentId, status, filter));
+        fail(error, 'bulkReview');
+      }
+      const n = Number(data ?? 0);
+      changed += n;
+      if (n === 0) break;
+    }
+    return changed;
+  }
+
+  /** Fallback when the SQL function isn't installed: small id batches (long ?id=in.(...) URLs are rejected as Bad Request). Slow; may stop at a time budget — run again to continue. */
+  private async bulkReviewByIds(documentId: string, status: 'APPROVED' | 'REJECTED', filter: { confidence?: 'LOW' | 'MEDIUM' }) {
+    const deadline = Date.now() + 45_000;
+    let changed = 0;
+    while (Date.now() < deadline) {
       let q = this.sb.from('acfta_records').select('id').eq('document_id', documentId).eq('review_status', 'PENDING');
       if (filter.confidence) q = q.eq('confidence', filter.confidence);
-      const { data, error } = await q.limit(1000);
+      const { data, error } = await q.limit(100);
       fail(error, 'bulkReview.select');
       if (!data?.length) break;
       const { error: e2 } = await this.sb.from('acfta_records').update({ review_status: status }).in('id', data.map((r: any) => r.id));
@@ -111,6 +128,7 @@ export class SupabaseAcftaStore implements AcftaStore {
     }
     return changed;
   }
+
   async getRecord(id: string) {
     const { data, error } = await this.sb.from('acfta_records').select().eq('id', id).maybeSingle();
     fail(error, 'getRecord'); return data ? recFromRow(data) : null;
