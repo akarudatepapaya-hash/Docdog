@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseRows, linesToRows } from './candidates';
+import { endGazette, extractEffectiveFrom, looksLikeGazettePage, newGazetteState, parseGazettePage } from './gazette-parser';
 import { notConfiguredOcr, OcrNotConfiguredError, type OcrProvider } from './ocr';
 import type { PdfTextExtractor } from './pdf-extract';
 import type { AcftaDocument, AcftaStore, Actor, BlobStore, CandidateRecord } from './types';
@@ -43,9 +44,17 @@ export async function ingestAcftaPdf(input: IngestInput, deps: IngestDeps): Prom
     const text = await deps.extractor.extract(input.bytes);
     pageCount = text.pageCount;
     const ocr = deps.ocr ?? notConfiguredOcr;
+    const gazettePages = text.pages.filter((p) => looksLikeGazettePage(p.rows));
+    const isGazette = gazettePages.length >= 10; // the Royal Gazette table layout this project was built against
+    const gz = newGazetteState();
     for (const page of text.pages) {
       if (page.charCount >= SCANNED_PAGE_CHAR_THRESHOLD) {
-        const r = parseRows(page.pageNumber, page.rows, 'TEXT_LAYER');
+        if (isGazette) {
+          if (gazettePages.includes(page)) ignoredRows += parseGazettePage(page.pageNumber, page.rows, gz, candidates).ignoredRows;
+          else endGazette(gz, candidates);
+          continue;
+        }
+        const r = parseRows(page.pageNumber, page.rows.map((row) => row.map((c) => c.text)), 'TEXT_LAYER');
         candidates.push(...r.candidates); ignoredRows += r.ignoredRows;
         continue;
       }
@@ -60,9 +69,16 @@ export async function ingestAcftaPdf(input: IngestInput, deps: IngestDeps): Prom
           : `OCR หน้า ${page.pageNumber} ล้มเหลว`);
       }
     }
-  } catch {
-    doc = await deps.store.updateDocument(doc.id, { status: 'EXTRACTION_FAILED', extractionError: 'EXTRACTOR_ERROR' });
-    return { document: doc, candidateCount: 0, ocrRequiredPages, ignoredRows, warnings: ['อ่านไฟล์ PDF ไม่สำเร็จ'] };
+    endGazette(gz, candidates);
+    if (isGazette) {
+      const from = extractEffectiveFrom(text.pages.slice(0, 5).flatMap((p) => p.rows));
+      if (from) for (const c of candidates) c.effectiveFrom = from;
+      else warnings.push('ไม่พบวันที่ใช้บังคับในประกาศ จึงไม่ได้ระบุช่วงเวลามีผล');
+    }
+  } catch (e) {
+    const detail = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+    doc = await deps.store.updateDocument(doc.id, { status: 'EXTRACTION_FAILED', extractionError: `EXTRACTOR_ERROR: ${detail}` });
+    return { document: doc, candidateCount: 0, ocrRequiredPages, ignoredRows, warnings: ['อ่านไฟล์ PDF ไม่สำเร็จ', detail] };
   }
 
   if (candidates.length === 0) {

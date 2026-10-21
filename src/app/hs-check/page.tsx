@@ -63,7 +63,7 @@ function Checker() {
               <div key={f.recordId} style={{ borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
                 <div><strong>{f.hsCode}</strong> {f.description ?? <em>(เอกสารไม่ระบุคำอธิบาย)</em>} · <small>{f.matchType}</small></div>
                 <div>อัตราพิเศษ: {f.rate.raw ?? <em>เอกสารไม่ระบุ</em>}{f.rate.value !== null && ` (ค่า ${f.rate.value})`}</div>
-                <div>เงื่อนไข: {f.conditions ?? <em>เอกสารไม่ระบุ</em>} · ช่วงเวลา: {f.effectiveFrom ?? '—'} ถึง {f.effectiveTo ?? '—'}</div>
+                <div>ประเทศที่ได้รับสิทธิ/เงื่อนไข: {f.conditions ?? <em>เอกสารไม่ระบุ</em>} · ช่วงเวลา: {f.effectiveFrom ?? '—'} ถึง {f.effectiveTo ?? '—'}</div>
                 <small>ต้นฉบับ: {f.sourceText}</small>
               </div>
             ))}

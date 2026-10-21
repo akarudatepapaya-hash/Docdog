@@ -36,6 +36,9 @@ export function createAcftaAdapter(reader: AcftaReader, now: () => Date = () => 
       if (f.missingFields.length) warnings.push(`หน้า ${f.document.page}: เอกสารไม่มีข้อมูล ${f.missingFields.join(', ')} (ไม่ใช่ค่าศูนย์)`);
       if (f.matchType === 'RECORD_IS_PREFIX_OF_QUERY') warnings.push(`หน้า ${f.document.page}: เอกสารระบุพิกัดระดับ ${f.hsCode} ซึ่งกว้างกว่าพิกัดที่กรอก`);
     }
+    const perCode = new Map<string, number>();
+    for (const r of rows) perCode.set(`${r.documentId}:${r.hsCodeDigits}`, (perCode.get(`${r.documentId}:${r.hsCodeDigits}`) ?? 0) + 1);
+    for (const [k, n] of perCode) if (n > 1) warnings.push(`พิกัด ${k.split(':')[1]} มี ${n} บรรทัดย่อยในเอกสาร (รหัสย่อยต่างกัน อัตราอาจต่างกัน) ตรวจว่าสินค้าตรงบรรทัดใด`);
     const seen = new Set<string>();
     const provenance = findings.flatMap((f) => {
       if (seen.has(f.document.id)) return [];
@@ -49,7 +52,7 @@ export function createAcftaAdapter(reader: AcftaReader, now: () => Date = () => 
     });
     return {
       ...base, status: 'MATCH_FOUND', message: `พบ ${findings.length} รายการในเอกสาร ACFTA`, findings, provenance, warnings,
-      manualChecksRequired: ['ตรวจเงื่อนไขแหล่งกำเนิดสินค้า (ROO) และหนังสือรับรอง Form E ก่อนใช้สิทธิ'],
+      manualChecksRequired: ['ตรวจเงื่อนไขแหล่งกำเนิดสินค้า (ROO) และหนังสือรับรอง Form E ก่อนใช้สิทธิ', 'ตรวจว่าเอกสารที่นำเข้ายังเป็นฉบับล่าสุด (อาจมีประกาศแก้ไขภายหลัง) และประเทศที่ได้รับสิทธิตรงกับประเทศต้นทาง'],
     };
   };
 }

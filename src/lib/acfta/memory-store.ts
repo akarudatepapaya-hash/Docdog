@@ -2,7 +2,7 @@ import { matchHs, recordPrefixesOf } from '../hs/normalize';
 import type { PublishedAcftaRecord } from '../hs/types';
 import { StateError } from './review';
 import type {
-  AcftaDocument, AcftaRecord, AcftaStore, BlobStore, CandidateRecord, NewDocument, ReviewEvent,
+  AcftaDocument, AcftaRecord, AcftaStore, BlobStore, CandidateRecord, NewDocument, RecordQuery, ReviewEvent,
 } from './types';
 
 /** In-memory implementation used by tests; mirrors the rules enforced by the SQL migration. */
@@ -39,8 +39,24 @@ export class InMemoryAcftaStore implements AcftaStore {
     }
     return cands.length;
   }
-  async listRecords(documentId: string, status?: AcftaRecord['reviewStatus']) {
-    return [...this.recs.values()].filter((r) => r.documentId === documentId && (!status || r.reviewStatus === status)).map((r) => ({ ...r }));
+  private query(documentId: string, o: RecordQuery = {}) {
+    const q = o.q?.replace(/\D/g, '');
+    return [...this.recs.values()].filter((r) => r.documentId === documentId
+      && (!o.status || r.reviewStatus === o.status) && (!o.confidence || r.confidence === o.confidence)
+      && (!q || r.hsCodeDigits.startsWith(q)));
+  }
+  async listRecords(documentId: string, o: RecordQuery = {}) {
+    const all = this.query(documentId, o);
+    return all.slice(o.offset ?? 0, o.limit ? (o.offset ?? 0) + o.limit : undefined).map((r) => ({ ...r }));
+  }
+  async countRecords(documentId: string, o: RecordQuery = {}) { return this.query(documentId, o).length; }
+  async bulkReview(documentId: string, status: 'APPROVED' | 'REJECTED', filter: { confidence?: 'LOW' | 'MEDIUM' }, actorId: string) {
+    const rows = this.query(documentId, { status: 'PENDING', confidence: filter.confidence });
+    for (const r of rows) {
+      this.recs.set(r.id, { ...r, reviewStatus: status, reviewedBy: actorId, reviewedAt: new Date().toISOString() });
+      this.events.push({ id: this.id('evt'), at: new Date().toISOString(), documentId, recordId: r.id, action: status, actorId, before: { reviewStatus: 'PENDING' }, after: { reviewStatus: status }, note: 'bulk' });
+    }
+    return rows.length;
   }
   async getRecord(id: string) { const r = this.recs.get(id); return r ? { ...r } : null; }
   async updateRecord(id: string, patch: Partial<AcftaRecord>, event: Omit<ReviewEvent, 'id' | 'at'>) {

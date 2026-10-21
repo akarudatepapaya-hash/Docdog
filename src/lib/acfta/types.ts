@@ -65,13 +65,18 @@ export interface NewDocument {
   datasetKey: string; name: string; version: string; storagePath: string; sha256: string; uploadedBy: string;
 }
 
+export interface RecordQuery { status?: ReviewStatus; confidence?: 'LOW' | 'MEDIUM'; q?: string; limit?: number; offset?: number }
+
 export interface AcftaStore {
   createDocument(d: NewDocument): Promise<AcftaDocument>;
   updateDocument(id: string, patch: Partial<AcftaDocument>): Promise<AcftaDocument>;
   getDocument(id: string): Promise<AcftaDocument | null>;
   listDocuments(): Promise<AcftaDocument[]>;
   insertCandidates(documentId: string, cands: CandidateRecord[]): Promise<number>;
-  listRecords(documentId: string, status?: ReviewStatus): Promise<AcftaRecord[]>;
+  listRecords(documentId: string, opts?: RecordQuery): Promise<AcftaRecord[]>;
+  countRecords(documentId: string, opts?: RecordQuery): Promise<number>;
+  /** Approve/reject PENDING records in bulk (batched); returns how many changed. */
+  bulkReview(documentId: string, status: Exclude<ReviewStatus, 'PENDING'>, filter: { confidence?: 'LOW' | 'MEDIUM' }, actorId: string): Promise<number>;
   getRecord(id: string): Promise<AcftaRecord | null>;
   updateRecord(id: string, patch: Partial<AcftaRecord>, event: Omit<ReviewEvent, 'id' | 'at'>): Promise<AcftaRecord>;
   publishDocument(documentId: string, supersedesId: string | null, actorId: string): Promise<void>;

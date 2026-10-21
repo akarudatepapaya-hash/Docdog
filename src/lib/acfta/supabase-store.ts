@@ -3,7 +3,7 @@ import { matchHs, recordPrefixesOf } from '../hs/normalize';
 import type { PublishedAcftaRecord, TradeRemedyCase, TradeRemedyRepository, TradeRemedySnapshot } from '../hs/types';
 import { StateError } from './review';
 import type {
-  AcftaDocument, AcftaRecord, AcftaStore, BlobStore, CandidateRecord, NewDocument, ReviewEvent, ReviewStatus,
+  AcftaDocument, AcftaRecord, AcftaStore, BlobStore, CandidateRecord, NewDocument, RecordQuery, ReviewEvent,
 } from './types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -71,10 +71,45 @@ export class SupabaseAcftaStore implements AcftaStore {
     }
     return rows.length;
   }
-  async listRecords(documentId: string, status?: ReviewStatus) {
-    let q = this.sb.from('acfta_records').select().eq('document_id', documentId).order('page_number').order('hs_code_digits');
-    if (status) q = q.eq('review_status', status);
-    const { data, error } = await q; fail(error, 'listRecords'); return (data ?? []).map(recFromRow);
+  private recQuery(documentId: string, o: RecordQuery, head = false) {
+    let q = this.sb.from('acfta_records').select(head ? 'id' : '*', head ? { count: 'exact', head: true } : undefined).eq('document_id', documentId);
+    if (o.status) q = q.eq('review_status', o.status);
+    if (o.confidence) q = q.eq('confidence', o.confidence);
+    const digits = o.q?.replace(/\D/g, '');
+    if (digits) q = q.like('hs_code_digits', `${digits}%`);
+    return q;
+  }
+  async listRecords(documentId: string, o: RecordQuery = {}) {
+    const PAGE = 1000; // PostgREST returns at most 1000 rows per request
+    const out: AcftaRecord[] = [];
+    const want = o.limit ?? Infinity;
+    for (let off = o.offset ?? 0; out.length < want; off += PAGE) {
+      const n = Math.min(PAGE, want - out.length);
+      const { data, error } = await this.recQuery(documentId, o).order('page_number').order('hs_code_digits').range(off, off + n - 1);
+      fail(error, 'listRecords');
+      out.push(...(data ?? []).map(recFromRow));
+      if ((data?.length ?? 0) < n) break;
+    }
+    return out;
+  }
+  async countRecords(documentId: string, o: RecordQuery = {}) {
+    const { count, error } = await this.recQuery(documentId, o, true);
+    fail(error, 'countRecords'); return count ?? 0;
+  }
+  async bulkReview(documentId: string, status: 'APPROVED' | 'REJECTED', filter: { confidence?: 'LOW' | 'MEDIUM' }, _actorId: string) {
+    // batches of 1000 keep each statement short (Supabase statement timeout is a few seconds); audit rows come from the DB trigger
+    let changed = 0;
+    for (;;) {
+      let q = this.sb.from('acfta_records').select('id').eq('document_id', documentId).eq('review_status', 'PENDING');
+      if (filter.confidence) q = q.eq('confidence', filter.confidence);
+      const { data, error } = await q.limit(1000);
+      fail(error, 'bulkReview.select');
+      if (!data?.length) break;
+      const { error: e2 } = await this.sb.from('acfta_records').update({ review_status: status }).in('id', data.map((r: any) => r.id));
+      fail(e2, 'bulkReview.update');
+      changed += data.length;
+    }
+    return changed;
   }
   async getRecord(id: string) {
     const { data, error } = await this.sb.from('acfta_records').select().eq('id', id).maybeSingle();

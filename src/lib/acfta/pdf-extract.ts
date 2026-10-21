@@ -1,7 +1,9 @@
+export interface Cell { x: number; text: string }
+
 export interface PdfPageText {
   pageNumber: number;
   charCount: number;
-  rows: string[][]; // each row = cells split by horizontal gaps
+  rows: Cell[][]; // each row = cells split by horizontal gaps, left edge x kept for column mapping
 }
 
 export interface PdfTextExtractor {
@@ -13,6 +15,9 @@ interface Item { str: string; x: number; y: number; w: number }
 /** Text-layer extractor built on pdfjs-dist. It reads text only; it does NOT OCR. */
 export const pdfjsExtractor: PdfTextExtractor = {
   async extract(bytes) {
+    // Serverless bundles can't resolve pdfjs' worker file; preloading its handler makes pdfjs skip that lookup.
+    const g = globalThis as { pdfjsWorker?: unknown };
+    if (!g.pdfjsWorker) g.pdfjsWorker = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const doc = await pdfjs.getDocument({
       data: new Uint8Array(bytes), useSystemFonts: true, disableFontFace: true, isEvalSupported: false,
@@ -34,7 +39,7 @@ export const pdfjsExtractor: PdfTextExtractor = {
   },
 };
 
-export function toRows(items: Item[], yTol = 2.5, gap = 8): string[][] {
+export function toRows(items: Item[], yTol = 2.5, gap = 8): Cell[][] {
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines: Item[][] = [];
   for (const it of sorted) {
@@ -43,14 +48,15 @@ export function toRows(items: Item[], yTol = 2.5, gap = 8): string[][] {
   }
   return lines.map((l) => {
     l.sort((a, b) => a.x - b.x);
-    const cells: string[] = [];
+    const cells: Cell[] = [];
     let cur = l[0]!.str;
+    let curX = l[0]!.x;
     let end = l[0]!.x + l[0]!.w;
     for (const it of l.slice(1)) {
-      if (it.x - end > gap) { cells.push(cur.trim()); cur = it.str; } else cur += (it.x - end > 1 ? ' ' : '') + it.str;
+      if (it.x - end > gap) { cells.push({ x: curX, text: cur.trim() }); cur = it.str; curX = it.x; } else cur += (it.x - end > 1 ? ' ' : '') + it.str;
       end = it.x + it.w;
     }
-    cells.push(cur.trim());
+    cells.push({ x: curX, text: cur.trim() });
     return cells;
   });
 }

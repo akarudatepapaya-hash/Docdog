@@ -33,19 +33,27 @@ export function createReviewService(store: AcftaStore) {
       if (!canReview(actor)) throw new ForbiddenError();
       const rec = await loadEditable(recordId);
       const patch: Partial<AcftaRecord> = { ...fields, editedByReviewer: true, reviewStatus: 'PENDING', reviewedBy: null, reviewedAt: null };
-      if (fields.hsCodeRaw && !fields.hsCodeDigits) patch.hsCodeDigits = fields.hsCodeRaw.replace(/\D/g, '');
+      if (fields.hsCodeRaw && !fields.hsCodeDigits) patch.hsCodeDigits = fields.hsCodeRaw.trim().split(/\s+/)[0]!.replace(/\D/g, '');
       return store.updateRecord(recordId, patch, {
         documentId: rec.documentId, recordId, action: 'EDIT', actorId: actor.id, before: fields && pick(rec, fields), after: fields, note: note ?? null,
       });
+    },
+
+    /** Bulk decision for PENDING rows (optionally only one confidence level). Individual audit rows are still written. */
+    async decideAll(actor: Actor, documentId: string, status: 'APPROVED' | 'REJECTED', filter: { confidence?: 'LOW' | 'MEDIUM' } = {}) {
+      if (!canReview(actor)) throw new ForbiddenError();
+      const doc = await store.getDocument(documentId);
+      if (!doc || doc.status !== 'IN_REVIEW') throw new StateError('เอกสารไม่ได้อยู่ในสถานะตรวจทาน');
+      return store.bulkReview(documentId, status, filter, actor.id);
     },
 
     async publish(actor: Actor, documentId: string, supersedesId?: string) {
       if (!actor.roles.includes('admin')) throw new ForbiddenError('เฉพาะ Admin เท่านั้นที่เผยแพร่ชุดข้อมูลได้');
       const doc = await store.getDocument(documentId);
       if (!doc || doc.status !== 'IN_REVIEW') throw new StateError('เอกสารต้องอยู่ในสถานะตรวจทานก่อนเผยแพร่');
-      const recs = await store.listRecords(documentId);
-      if (recs.some((r) => r.reviewStatus === 'PENDING')) throw new StateError('ยังมีรายการที่รอตรวจทาน');
-      if (!recs.some((r) => r.reviewStatus === 'APPROVED')) throw new StateError('ไม่มีรายการที่อนุมัติ');
+      const pending = await store.countRecords(documentId, { status: 'PENDING' });
+      if (pending > 0) throw new StateError(`ยังมี ${pending} รายการที่รอตรวจทาน`);
+      if ((await store.countRecords(documentId, { status: 'APPROVED' })) === 0) throw new StateError('ไม่มีรายการที่อนุมัติ');
       await store.publishDocument(documentId, supersedesId ?? null, actor.id);
     },
   };
